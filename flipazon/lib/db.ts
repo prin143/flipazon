@@ -1,5 +1,5 @@
 import "server-only";
-import { Pool, type PoolClient, type QueryResultRow } from "@/node_modules/@types/pg";
+import { Pool, type PoolClient, type QueryResultRow } from "pg";
 
 declare global {
   // Keep one connection pool across Next.js dev hot reloads.
