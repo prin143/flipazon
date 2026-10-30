@@ -1,10 +1,14 @@
--- Flipazon Phase 3 (PostgreSQL). Idempotent schema creation for local development.
+
+-- Flipazon Phase 3 + Razorpay Payment Integration
+-- PostgreSQL schema. Safe to run multiple times.
+
 CREATE TABLE IF NOT EXISTS users (
   id BIGSERIAL PRIMARY KEY,
   name VARCHAR(80) NOT NULL,
   email VARCHAR(254) NOT NULL UNIQUE,
   password_hash TEXT NOT NULL,
-  role VARCHAR(12) NOT NULL DEFAULT 'customer' CHECK (role IN ('customer','admin')),
+  role VARCHAR(12) NOT NULL DEFAULT 'customer'
+    CHECK (role IN ('customer','admin')),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -14,17 +18,24 @@ CREATE TABLE IF NOT EXISTS sessions (
   expires_at TIMESTAMPTZ NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-CREATE INDEX IF NOT EXISTS sessions_user_id_idx ON sessions(user_id);
-CREATE INDEX IF NOT EXISTS sessions_expires_idx ON sessions(expires_at);
+
+CREATE INDEX IF NOT EXISTS sessions_user_id_idx
+ON sessions(user_id);
+
+CREATE INDEX IF NOT EXISTS sessions_expires_idx
+ON sessions(expires_at);
+
 
 CREATE TABLE IF NOT EXISTS products (
   id BIGSERIAL PRIMARY KEY,
   name VARCHAR(160) NOT NULL,
-  category VARCHAR(30) NOT NULL CHECK (category IN ('electronics','fashion','home','beauty','sports','accessories')),
+  category VARCHAR(30) NOT NULL
+    CHECK (category IN ('electronics','fashion','home','beauty','sports','accessories')),
   brand VARCHAR(80) NOT NULL,
   price INTEGER NOT NULL CHECK (price > 0),
   original_price INTEGER NOT NULL CHECK (original_price >= price),
-  rating NUMERIC(2,1) NOT NULL DEFAULT 4.5 CHECK (rating BETWEEN 0 AND 5),
+  rating NUMERIC(2,1) NOT NULL DEFAULT 4.5
+    CHECK (rating BETWEEN 0 AND 5),
   review_count INTEGER NOT NULL DEFAULT 0,
   image VARCHAR(120) NOT NULL DEFAULT '/products/headphones.svg',
   badge VARCHAR(30),
@@ -36,6 +47,7 @@ CREATE TABLE IF NOT EXISTS products (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+
 CREATE TABLE IF NOT EXISTS cart_items (
   user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   product_id BIGINT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
@@ -43,25 +55,35 @@ CREATE TABLE IF NOT EXISTS cart_items (
   PRIMARY KEY(user_id, product_id)
 );
 
+
 CREATE TABLE IF NOT EXISTS wishlist_items (
   user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   product_id BIGINT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
   PRIMARY KEY(user_id, product_id)
 );
 
--- Phase 3: real order records for the local COD checkout flow.
+
+-- Orders table: COD + Razorpay
+
 CREATE TABLE IF NOT EXISTS orders (
   id BIGSERIAL PRIMARY KEY,
   order_number VARCHAR(48) NOT NULL UNIQUE,
   user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+
   status VARCHAR(20) NOT NULL DEFAULT 'placed'
     CHECK (status IN ('placed','confirmed','shipped','delivered','cancelled')),
-  payment_method VARCHAR(20) NOT NULL DEFAULT 'cod' CHECK (payment_method IN ('cod')),
+
+  payment_method VARCHAR(20) NOT NULL DEFAULT 'cod'
+    CONSTRAINT orders_payment_method_check
+    CHECK (payment_method IN ('cod','razorpay')),
+
   payment_status VARCHAR(20) NOT NULL DEFAULT 'pending'
     CHECK (payment_status IN ('pending','paid','failed','refunded')),
+
   subtotal INTEGER NOT NULL CHECK (subtotal > 0),
   shipping_fee INTEGER NOT NULL DEFAULT 0 CHECK (shipping_fee >= 0),
   total INTEGER NOT NULL CHECK (total > 0),
+
   customer_name VARCHAR(80) NOT NULL,
   customer_email VARCHAR(254) NOT NULL,
   phone VARCHAR(16) NOT NULL,
@@ -71,11 +93,46 @@ CREATE TABLE IF NOT EXISTS orders (
   state VARCHAR(80) NOT NULL,
   postal_code CHAR(6) NOT NULL,
   country VARCHAR(60) NOT NULL DEFAULT 'India',
+
+  -- Razorpay payment references
+  razorpay_order_id VARCHAR(64),
+  razorpay_payment_id VARCHAR(64),
+
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-CREATE INDEX IF NOT EXISTS orders_user_created_idx ON orders(user_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS orders_status_created_idx ON orders(status, created_at DESC);
+
+
+-- Migration: also update databases that already have the old COD-only table.
+
+ALTER TABLE orders
+DROP CONSTRAINT IF EXISTS orders_payment_method_check;
+
+ALTER TABLE orders
+ADD CONSTRAINT orders_payment_method_check
+CHECK (payment_method IN ('cod','razorpay'));
+
+ALTER TABLE orders
+ADD COLUMN IF NOT EXISTS razorpay_order_id VARCHAR(64);
+
+ALTER TABLE orders
+ADD COLUMN IF NOT EXISTS razorpay_payment_id VARCHAR(64);
+
+
+CREATE INDEX IF NOT EXISTS orders_user_created_idx
+ON orders(user_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS orders_status_created_idx
+ON orders(status, created_at DESC);
+
+CREATE UNIQUE INDEX IF NOT EXISTS orders_razorpay_order_id_idx
+ON orders(razorpay_order_id)
+WHERE razorpay_order_id IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS orders_razorpay_payment_id_idx
+ON orders(razorpay_payment_id)
+WHERE razorpay_payment_id IS NOT NULL;
+
 
 CREATE TABLE IF NOT EXISTS order_items (
   id BIGSERIAL PRIMARY KEY,
@@ -89,4 +146,6 @@ CREATE TABLE IF NOT EXISTS order_items (
   line_total INTEGER NOT NULL CHECK (line_total > 0),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-CREATE INDEX IF NOT EXISTS order_items_order_idx ON order_items(order_id);
+
+CREATE INDEX IF NOT EXISTS order_items_order_idx
+ON order_items(order_id);
